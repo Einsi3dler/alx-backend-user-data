@@ -1,78 +1,114 @@
 #!/usr/bin/env python3
+"""_summary_
 """
-Route module for the API
-"""
-from os import getenv
-from api.v1.views import app_views
-from api.v1.auth.auth import Auth
-from api.v1.auth.basic_auth import BasicAuth
-from api.v1.auth.session_auth import SessionAuth
-from api.v1.auth.session_exp_auth import SessionExpAuth
-from api.v1.auth.session_db_auth import SessionDBAuth
-from flask import Flask, jsonify, abort, request
-from flask_cors import (CORS, cross_origin)
-import os
 
+
+from flask import Flask, jsonify, request, abort, redirect
+from auth import Auth
+
+AUTH = Auth()
 
 app = Flask(__name__)
-app.register_blueprint(app_views)
-CORS(app, resources={r"/api/v1/*": {"origins": "*"}})
-auth = None
-
-if getenv("AUTH_TYPE") == "auth":
-    auth = Auth()
-elif getenv("AUTH_TYPE") == "basic_auth":
-    auth = BasicAuth()
-elif getenv("AUTH_TYPE") == "session_auth":
-    auth = SessionAuth()
-elif getenv("AUTH_TYPE") == "session_exp_auth":
-    auth = SessionExpAuth()
-elif getenv("AUTH_TYPE") == "session_db_auth":
-    auth = SessionDBAuth()
 
 
-@app.errorhandler(404)
-def not_found(error) -> str:
-    """ Not found handler
+@app.route('/', methods=['GET'])
+def index() -> str:
+    """_summary_
     """
-    return jsonify({"error": "Not found"}), 404
+    return jsonify({"message": "Bienvenue"})
 
 
-@app.errorhandler(401)
-def unauthorized(error) -> str:
+@app.route('/users', methods=['POST'])
+def users() -> str:
+    """_summary_
     """
-    Unauthorized handler.
-    """
-    return jsonify({"error": "Unauthorized"}), 401
+    email = request.form.get('email')
+    password = request.form.get('password')
+
+    # regsiter user if user does not exist
+    try:
+        user = AUTH.register_user(email, password)
+        return jsonify({"email": user.email, "message": "user created"})
+    except Exception:
+        return jsonify({"message": "email already registered"}), 400
 
 
-@app.errorhandler(403)
-def unauthorized(error) -> str:
+@app.route('/sessions', methods=['POST'])
+def login() -> str:
+    """_summary_
+
+    Returns:
+        str: _description_
     """
-    Forbidden handler.
-    """
-    return jsonify({"error": "Forbidden"}), 403
+    email = request.form.get('email')
+    password = request.form.get('password')
+
+    if not (AUTH.valid_login(email, password)):
+        abort(401)
+    else:
+        # create a new session
+        session_id = AUTH.create_session(email)
+        response = jsonify({"email": email, "message": "logged in"})
+        response.set_cookie('session_id', session_id)
+
+    return response
 
 
-@app.before_request
-def before_request():
+@app.route('/sessions', methods=['DELETE'])
+def logout() -> str:
+    """_summary_
     """
-    handler before_request
-    """
-    authorized_list = ['/api/v1/status/',
-                       '/api/v1/unauthorized/', '/api/v1/forbidden/',
-                       '/api/v1/auth_session/login/']
+    session_id = request.cookies.get('session_id')
+    user = AUTH.get_user_from_session_id(session_id)
+    if not user:
+        abort(403)
+    AUTH.destroy_session(user.id)
+    return redirect('/')
 
-    if auth and auth.require_auth(request.path, authorized_list):
-        if auth.authorization_header(request) is None and \
-                auth.session_cookie(request) is None:
-            abort(401)
-        if auth.current_user(request) is None:
-            abort(403)
-        request.current_user = auth.current_user(request)
+
+@app.route('/profile', methods=['GET'])
+def profile() -> str:
+    """_summary_
+    """
+    session_id = request.cookies.get('session_id')
+    user = AUTH.get_user_from_session_id(session_id)
+    if user:
+        return jsonify({"email": user.email}), 200
+    else:
+        abort(403)
+
+
+@app.route('/reset_password', methods=['POST'])
+def get_reset_password_token() -> str:
+    """_summary_
+
+    Returns:
+        str: _description_
+    """
+    email = request.form.get('email')
+    try:
+        reset_token = AUTH.get_reset_password_token(email)
+        return jsonify({"email": email, "reset_token": reset_token}), 200
+    except Exception:
+        abort(403)
+
+
+@app.route('/reset_password', methods=['PUT'])
+def update_password() -> str:
+    """_summary_
+
+    Returns:
+        str: _description_
+    """
+    email = request.form.get('email')
+    reset_token = request.form.get('reset_token')
+    new_password = request.form.get('new_password')
+    try:
+        AUTH.update_password(reset_token, new_password)
+        return jsonify({"email": email, "message": "Password updated"}), 200
+    except Exception:
+        abort(403)
 
 
 if __name__ == "__main__":
-    host = getenv("API_HOST", "0.0.0.0")
-    port = getenv("API_PORT", "5000")
-    app.run(host=host, port=port)
+    app.run(host="0.0.0.0", port="5000")
